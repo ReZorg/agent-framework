@@ -211,4 +211,20 @@ internal static partial class Logs
         this ILogger logger,
         string source,
         string sink);
+
+    [LoggerMessage(
+        EventId = 112,
+        Level = LogLevel.Information,
+        Message = "Workflow waiting for external input at RequestPort '{RequestPortId}'")]
+    public static partial void LogWaitingForExternalEvent(
+        this ILogger logger,
+        string requestPortId);
+
+    [LoggerMessage(
+        EventId = 113,
+        Level = LogLevel.Information,
+        Message = "Received external event for RequestPort '{RequestPortId}'")]
+    public static partial void LogReceivedExternalEvent(
+        this ILogger logger,
+        string requestPortId);
 }

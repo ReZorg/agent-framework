@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) Microsoft. All rights reserved.
 
 // ConfigureAwait Usage in Orchestration Code:
 // This file uses ConfigureAwait(true) because it runs within orchestration context.
@@ -159,6 +159,9 @@ internal sealed class DurableWorkflowRunner
 
         bool haltRequested = false;
 
+        // Custom status is written to the orchestration so external clients can poll for events and HITL state
+        DurableWorkflowLiveStatus customStatus = new();
+
         for (int superstep = 1; superstep <= MaxSupersteps; superstep++)
         {
             List<ExecutorInput> executorInputs = CollectExecutorInputs(state, logger);
@@ -173,9 +176,9 @@ internal sealed class DurableWorkflowRunner
                 logger.LogSuperstepExecutors(superstep, string.Join(", ", executorInputs.Select(e => e.ExecutorId)));
             }
 
-            string[] results = await DispatchExecutorsInParallelAsync(context, executorInputs, state.SharedState, logger).ConfigureAwait(true);
+            string[] results = await DispatchExecutorsInParallelAsync(context, executorInputs, state.SharedState, customStatus, logger).ConfigureAwait(true);
 
-            haltRequested = ProcessSuperstepResults(executorInputs, results, state, context, logger);
+            haltRequested = ProcessSuperstepResults(executorInputs, results, state, context, customStatus, logger);
 
             if (haltRequested)
             {
@@ -193,7 +196,7 @@ internal sealed class DurableWorkflowRunner
         // Publish final events for live streaming (skip during replay)
         if (!context.IsReplaying)
         {
-            PublishEventsToCustomStatus(context, state);
+            PublishEventsToCustomStatus(context, state, customStatus);
         }
 
         string finalResult = GetFinalResult(state.LastResults);
@@ -227,10 +230,11 @@ internal sealed class DurableWorkflowRunner
         TaskOrchestrationContext context,
         List<ExecutorInput> executorInputs,
         Dictionary<string, string> sharedState,
+        DurableWorkflowLiveStatus customStatus,
         ILogger logger)
     {
         Task<string>[] dispatchTasks = executorInputs
-            .Select(input => DurableExecutorDispatcher.DispatchAsync(context, input.Info, input.Envelope, sharedState, logger))
+            .Select(input => DurableExecutorDispatcher.DispatchAsync(context, input.Info, input.Envelope, sharedState, customStatus, logger))
             .ToArray();
 
         return await Task.WhenAll(dispatchTasks).ConfigureAwait(true);
@@ -362,6 +366,7 @@ internal sealed class DurableWorkflowRunner
         string[] rawResults,
         SuperstepState state,
         TaskOrchestrationContext context,
+        DurableWorkflowLiveStatus customStatus,
         ILogger logger)
     {
         bool haltRequested = false;
@@ -387,7 +392,7 @@ internal sealed class DurableWorkflowRunner
             // Publish events for live streaming (skip during replay)
             if (!context.IsReplaying)
             {
-                PublishEventsToCustomStatus(context, state);
+                PublishEventsToCustomStatus(context, state, customStatus);
             }
 
             RouteOutputToSuccessors(executorId, resultInfo.Result, resultInfo.SentMessages, state, logger);
@@ -472,12 +477,9 @@ internal sealed class DurableWorkflowRunner
     /// the orchestration is still running. It is cleared by the framework on completion,
     /// so events are also included in <see cref="DurableWorkflowResult"/> for final retrieval.
     /// </remarks>
-    private static void PublishEventsToCustomStatus(TaskOrchestrationContext context, SuperstepState state)
+    private static void PublishEventsToCustomStatus(TaskOrchestrationContext context, SuperstepState state, DurableWorkflowLiveStatus customStatus)
     {
-        DurableWorkflowCustomStatus customStatus = new()
-        {
-            Events = state.AccumulatedEvents
-        };
+        customStatus.Events = state.AccumulatedEvents;
 
         // Pass the object directly — the framework's DataConverter handles serialization.
         // Pre-serializing would cause double-serialization (string wrapped in JSON quotes).
